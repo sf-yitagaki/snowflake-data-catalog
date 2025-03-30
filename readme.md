@@ -97,7 +97,7 @@
     * 左上の「パッケージ」にて`python-graphviz`, `snowflake-ml-python`をインポート
 
 ## 設定項目
-    * DEFAULT_LLM_MODEL: AIコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'mixtral-8x7b')
+    - DEFAULT_LLM_MODEL: AIコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'mixtral-8x7b')
 
     * DEFAULT_EMBEDDING_MODEL: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
 
