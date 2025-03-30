@@ -97,18 +97,21 @@
     * 左上の「パッケージ」にて`python-graphviz`, `snowflake-ml-python`をインポート
 
 ## 設定項目
-    ・ DEFAULT_LLM_MODEL: AIコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'llama-70b')
+*   **モデルの選択:**
+    * DEFAULT_LLM_MODEL: AIコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'llama-70b')
 
     * DEFAULT_EMBEDDING_MODEL: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
 
     * EMBEDDING_DIMENSION: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
 
+*   **テーブル名の選択:**
     * METADATA_TABLE_NAME: AIが生成したメタデータや「いいね」数を保存するSnowflakeテーブル名。 (デフォルト: "DATA_CATALOG_METADATA")
 
-使い方
+## 使い方
     * ページ選択: サイドバーで「データカタログ」または「管理」ページを選択します。
 
 データカタログページ:
+*   **機能:**
     * テーブルの閲覧: サイドバーでデータベースを選択し、必要に応じてスキーマで絞り込みます。選択された条件に一致するテーブル/ビューがメインエリアにカード形式で表示されます。
 
     * キーワード検索: サイドバーの検索ボックスにキーワードを入力し、「検索実行」ボタンを押します。メタデータテーブル内の情報（テーブル名、コメント、分析アイデアなど）を対象に検索します。
@@ -134,6 +137,7 @@
     * データリネージ: 詳細表示内で、遡る日数と深さを設定し、「リネージを表示/更新」ボタンを押すと、データの流れ（上流）がグラフで表示されます。グラフのエッジ（矢印）にカーソルを合わせると、関連するQuery IDなどの情報が表示されます。
 
 管理ページ:
+*   **機能:**
     * データベースとスキーマ（任意）を選択します。
 
     * 対象となるテーブルのプレビューが表示されます（メタデータ有無含む）。
@@ -143,18 +147,19 @@
     * 注意: テーブル数が多い場合、処理に時間がかかり、Snowflakeクレジットを消費します。
 
 データリネージ機能について
-    * この機能は SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY および SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY ビューに依存しています。これらのビューへのアクセス権限が必要です。
+*   **機能:**
+    * SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY および SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY ビューに依存しています。これらのビューへのアクセス権限が必要です。
 
 ACCOUNT_USAGE のデータには最大3時間の遅延があるため、リネージ情報もリアルタイムではありません。
-
+*   **確認事項:**
     * リネージグラフの描画には Graphviz が必要です。ローカル環境で実行する場合は、Graphvizがインストールされ、PATHが通っていることを確認してください。Streamlit in Snowflake 環境では、Graphvizが利用可能か確認が必要です（環境によっては利用できない場合があります）。
 
     * 現在は**上流（Upstream）**のリネージ、つまり対象テーブルにデータを書き込んだソースを遡る方向のみサポートしています。
 
     * 複雑なデータフローや大量の履歴がある場合、リネージの取得と描画に時間がかかることがあります。サイドバーで検索対象の日数や遡る深さを調整してください。
 
-注意点/制限事項
-    * Snowflakeクレジット: Snowflake Cortex関数（LLM, Embedding）の利用および ACCOUNT_USAGE へのクエリ実行は、Snowflakeクレジットを消費します。特に管理ページでの一括処理は注意が必要です。
+## 注意点/制限事項
+Snowflakeクレジット: Snowflake Cortex関数（LLM, Embedding）の利用および ACCOUNT_USAGE へのクエリ実行は、Snowflakeクレジットを消費します。特に管理ページでの一括処理は注意が必要です。
 
 権限: アプリケーションが必要とする各種Snowflakeオブジェクト（テーブル、ビュー、関数など）へのアクセス権限が正しく設定されていない場合、機能が制限されたり、エラーが発生したりします。
 
