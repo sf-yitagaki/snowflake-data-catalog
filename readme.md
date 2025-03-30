@@ -98,14 +98,14 @@
 
 ## 設定項目
 *   **モデルの選択:**
-    * DEFAULT_LLM_MODEL: AIコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'llama-70b')
+    * `DEFAULT_LLM_MODEL`: LLMのコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'llama-70b')
 
-    * DEFAULT_EMBEDDING_MODEL: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
+    * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
 
-    * EMBEDDING_DIMENSION: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
+    * `EMBEDDING_DIMENSION`: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
 
 *   **テーブル名の選択:**
-    * METADATA_TABLE_NAME: AIが生成したメタデータや「いいね」数を保存するSnowflakeテーブル名。 (デフォルト: "DATA_CATALOG_METADATA")
+    * `METADATA_TABLE_NAME`: AIが生成したメタデータや「いいね」数を保存するSnowflakeテーブル名。 (デフォルト: "DATA_CATALOG_METADATA")
 
 ## 使い方
     * ページ選択: サイドバーで「データカタログ」または「管理」ページを選択します。
@@ -144,7 +144,8 @@
 
     * 「...件のテーブルのメタデータを生成/更新する」ボタンを押すと、選択された範囲の全テーブルに対して、AIによるコメント、分析アイデア、ベクトルの生成・保存処理を一括で実行します。
 
-    * 注意: テーブル数が多い場合、処理に時間がかかり、Snowflakeクレジットを消費します。
+*   **注意:**
+    * テーブル数が多い場合、処理に時間がかかり、Snowflakeクレジットを消費します。
 
 データリネージ機能について
 *   **機能:**
