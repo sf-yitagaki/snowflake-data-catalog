@@ -44,7 +44,7 @@
     * 左上の「パッケージ」にて`python-graphviz`, `snowflake-ml-python`をインポート
 
 ## 設定項目
-    必要に応じてコードを変更してください。
+必要に応じてコードを変更してください。
 *   **モデルの選択:**
     * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
 
