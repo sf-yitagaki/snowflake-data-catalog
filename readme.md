@@ -41,18 +41,11 @@
 
 2.  **依存関係のインストール:**
     以下のライブラリをStreamlit in Snowflake上でインポートしてください。
-    ```txt
-    # requirements.txt
-    streamlit
-    snowflake-snowpark-python[pandas] # pandasも含む
-    graphviz
-    ```
     * 左上の「パッケージ」にて`python-graphviz`, `snowflake-ml-python`をインポート
 
 ## 設定項目
+    必要に応じてコードを変更してください。
 *   **モデルの選択:**
-    * `DEFAULT_LLM_MODEL`: LLMのコメント/アイデア生成に使用するCortex LLMモデル名。(例: 'claude-3-5-sonnet', 'llama-70b')
-
     * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
 
     * `EMBEDDING_DIMENSION`: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
