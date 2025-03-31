@@ -29,53 +29,6 @@
 *   **管理機能:**
     *   特定のデータベース/スキーマ内の全テーブルに対して、AIによるメタデータ（コメント、アイデア、ベクトル）を一括生成・更新。
 
-## 技術スタック
-
-*   **言語:** Python 
-*   **フレームワーク:** Streamlit
-*   **データベース連携:** Snowflake Snowpark for Python
-*   **AI機能:** Snowflake Cortex (LLM Functions, Embedding Functions)
-*   **データ可視化:** Graphviz (データリネージ用)
-*   **その他ライブラリ:** Pandas, JSON, Logging, RE
-
-## 前提条件
-
-*   **Snowflakeアカウント:**
-    *   SnowparkおよびStreamlit in Snowflakeが利用可能なアカウント。
-    *   **VECTOR型が有効化されている**こと。 ([参考: Snowflakeドキュメント](https://docs.snowflake.com/ja/user-guide/vector))
-    *   **Snowflake Cortex** 関数 (`COMPLETE`, `EMBED_TEXT_*`) が利用可能であること。
-*   **Python環境:** Python 3.8 以降。
-*   **Graphviz:** データリネージの可視化機能を利用する場合、Graphvizの実行ファイルがシステムにインストールされ、PATHが通っている必要があります。
-    *   [Graphviz 公式ダウンロードページ](https://graphviz.org/download/)
-    *   OSによってはパッケージマネージャ (apt, brew, yumなど) でインストール可能です。
-    *   インストール後、`dot` コマンドがターミナル/コマンドプロンプトで実行できることを確認してください。
-
-## Snowflakeの準備
-
-このアプリケーションを実行するには、Snowflake上で適切な権限を持つロールが必要です。`ACCOUNTADMIN` ロールを使用するのが最も簡単ですが、セキュリティ要件に応じて専用のロールを作成し、以下の権限を付与することを推奨します。
-
-1.  **アプリケーションが動作するデータベース/スキーマ:**
-    *   `USAGE` on DATABASE
-    *   `USAGE` on SCHEMA
-    *   `CREATE TABLE` on SCHEMA (初回起動時にメタデータテーブル `{METADATA_TABLE_NAME}` を作成するため)
-    *   `SELECT`, `INSERT`, `UPDATE`, `MERGE` on テーブル `{METADATA_TABLE_NAME}` (メタデータの読み書きのため)
-2.  **データソース（カタログ化対象）:**
-    *   `USAGE` on データベース (対象DB)
-    *   `USAGE` on スキーマ (対象スキーマ)
-    *   `SELECT` on テーブル/ビュー (スキーマ情報取得、将来的なデータプレビュー等)
-    *   `SELECT` on `INFORMATION_SCHEMA` (テーブル、カラム、コメント等のメタデータ取得のため)
-3.  **Snowflake Account Usage スキーマ:**
-    *   `IMPORTED PRIVILEGES` on DATABASE `SNOWFLAKE` (または、より限定的な権限)
-    *   `USAGE` on SCHEMA `SNOWFLAKE.ACCOUNT_USAGE`
-    *   `SELECT` on VIEW `SNOWFLAKE.ACCOUNT_USAGE.DATABASES` (データベース一覧取得の推奨方法)
-    *   `SELECT` on VIEW `SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY` (テーブルアクセス数、データリネージ取得のため)
-    *   `SELECT` on VIEW `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` (データリネージ取得のため)
-    *   **注意:** `ACCOUNT_USAGE` ビューへのアクセスには通常 `ACCOUNTADMIN` ロールが必要です。必要に応じて権限を付与してください。また、`ACCOUNT_USAGE` のデータには最大3時間の遅延があります。
-4.  **Snowflake Cortex 関数:**
-    *   `USAGE` on DATABASE `SNOWFLAKE.CORTEX` (または個別の関数に対する `USAGE`)
-    *   `USAGE` on FUNCTION `SNOWFLAKE.CORTEX.COMPLETE(...)` (LLM利用のため)
-    *   `USAGE` on FUNCTION `SNOWFLAKE.CORTEX.EMBED_TEXT_...(...)` (Embedding利用のため、コード内の `EMBED_FUNCTION_NAME` で指定されたもの)
-
 ## セットアップ
 
 1. **実行方法:**
@@ -87,7 +40,7 @@
     * Streamlitが起動した後、sis.pyをコピー＆ペースト
 
 2.  **依存関係のインストール:**
-    `requirements.txt` に記載されているライブラリをStreamlit in Snowflake上でインポートしてください。
+    以下のライブラリをStreamlit in Snowflake上でインポートしてください。
     ```txt
     # requirements.txt
     streamlit
@@ -108,7 +61,7 @@
     * `METADATA_TABLE_NAME`: AIが生成したメタデータや「いいね」数を保存するSnowflakeテーブル名。 (デフォルト: "DATA_CATALOG_METADATA")
 
 ## 使い方
-    * ページ選択: サイドバーで「データカタログ」または「管理」ページを選択します。
+ページ選択: サイドバーで「データカタログ」または「管理」ページを選択します。
 
 データカタログページ:
 *   **機能:**
