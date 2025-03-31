@@ -1220,7 +1220,7 @@ def generate_and_save_ai_metadata(database_name, schema_name, table_name, source
 def get_dynamic_lineage(target_database, target_schema, target_table, direction='upstream', max_depth=3, time_window_days=90):
     """
     指定されたテーブルを起点として、`snowflake.account_usage.access_history` から
-    動的なデータリネージ (データの流れ、依存関係) を取得します。
+    動的なデータネージ(データの流れ、依存関係) を取得します。
     現在は上流方向 (upstream: どのテーブルからデータが来たか) のみサポートします。
     Args:
         target_database (str): 起点テーブルのデータベース名。
