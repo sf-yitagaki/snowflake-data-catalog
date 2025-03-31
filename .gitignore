@@ -1,0 +1,3 @@
+# Ignore the 'old' directory and its contents
+old/
+.DS_Store
