@@ -16,8 +16,8 @@
     *   テーブル/カラムのコメント（Information Schemaから取得）
     *   直近1ヶ月のテーブルアクセス数（`ACCOUNT_USAGE.ACCESS_HISTORY`を使用）
 *   **AIによるメタデータ拡張:**
-    *   Snowflake Cortex LLM (例: `claude-3-5-sonnet`) を使用して、テーブルスキーマに基づいた**簡潔なテーブル概要**と**分析アイデア/ユースケース**を自動生成。
-    *   生成されたコメントを元に、Snowflake Cortex Embedding (例: `voyage-multilingual-2`) を使用して**ベクトル (Embedding)** を生成・保存。
+    *   Snowflake Cortex LLM (例: `claude-3-5-sonnet`) を使用して、テーブルスキーマに基づいた**簡潔なテーブル概要**と**分析アイデア/ユースケース**を自動生成。（2025年4月時点でAWS Tokyo では Claude 3.5 Sonnetは使用できないため、Mistral Large 2 や LLama 3.1 70b 等の利用を推奨）
+    *   生成されたコメントを元に、Snowflake Cortex Embedding (例:`multilingual-e5-large`, `voyage-multilingual-2`など) を使用して**ベクトル (Embedding)** を生成・保存。
 *   **高度な検索:**
     *   テーブル名、スキーマ名、コメントなどに含まれる**キーワード検索**。
     *   AIが生成したテーブルコメントのベクトルを利用した**ベクトル検索**（意味的な類似性に基づく検索）。
@@ -46,7 +46,7 @@
 ## 設定項目
 必要に応じてコードを変更してください。
 *   **モデルの選択:**
-    * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するCortex Embeddingモデル名。(例: 'voyage-multilingual-2', 'snowflake-arctic-embed-l')
+    * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するCortex Embeddingモデル名。(デフォルトでは`multilingual-e5-large`を使用。 `voyage-multilingual-2`, `snowflake-arctic-embed-l-v2.0` 等の選択も可能)
 
     * `EMBEDDING_DIMENSION`: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
 

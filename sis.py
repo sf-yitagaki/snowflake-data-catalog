@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__) # このモジュール用のロガーを�
 
 # LLMモデルとEmbeddingモデル ワークシート(要件に合わせて変更)
 DEFAULT_LLM_MODEL = 'claude-3-5-sonnet' # デフォルトで使用するLLMモデル名
-DEFAULT_EMBEDDING_MODEL = 'voyage-multilingual-2' # 使用するテキスト埋め込みモデル名
+DEFAULT_EMBEDDING_MODEL = 'multilingual-e5-large' # 使用するテキスト埋め込みモデル名
 # 備考: 使用するモデルはSnowflake環境で利用可能なものを指定してください。
 
 EMBEDDING_DIMENSION = 1024 # Embedding ベクトルの次元数 (使用するモデルに合わせる)
@@ -57,6 +57,7 @@ SELECT_OPTION = "<Select>"
 ### 選択可能なLLMモデルのリスト定義 ###
 AVAILABLE_LLM_MODELS = [
     'claude-3-5-sonnet',
+    'llama4-maverick',
     'mistral-large2', 
     'gemma-7b',
     'llama3.1-8b',
@@ -313,7 +314,7 @@ def get_schemas_for_database(database_name: str):
         query = f"""
         SELECT schema_name
         FROM {database_name}.INFORMATION_SCHEMA.SCHEMATA
-        WHERE schema_name NOT IN ('INFORMATION_SCHEMA', 'PUBLIC')
+        WHERE schema_name NOT IN ('INFORMATION_SCHEMA')
         ORDER BY schema_name;
         """
         # SQLを実行し、結果をPandas DataFrameに変換
@@ -1857,12 +1858,12 @@ def main_page():
     # キーワード検索入力欄 (キー 'search_input')
     search_term = st.sidebar.text_input("キーワード検索 (全テーブル対象)", key="search_input")
     # ベクトル検索有効化トグル (キー 'search_vector_toggle')
-    search_vector = st.sidebar.toggle("ベクトル検索を有効にする(推奨閾値:0.2)", value=True, help=f"検索語とLLM生成コメントのベクトル類似度({DEFAULT_EMBEDDING_MODEL}, {EMBEDDING_DIMENSION}次元)で検索します。", key="search_vector_toggle")
-    # ベクトル検索時の類似度閾値 (デフォルト 0.2)
-    similarity_threshold = 0.2
+    search_vector = st.sidebar.toggle("ベクトル検索を有効にする", value=True, help=f"検索語とLLM生成コメントのベクトル類似度({DEFAULT_EMBEDDING_MODEL}, {EMBEDDING_DIMENSION}次元)で検索します。", key="search_vector_toggle")
+    # ベクトル検索時の類似度閾値 (デフォルト 0.7)
+    similarity_threshold = 0.7
     # ベクトル検索が有効な場合のみスライダーを表示 (キー 'similarity_slider')
     if search_vector:
-        similarity_threshold = st.sidebar.slider("類似度の閾値", 0.0, 1.0, 0.2, 0.05, key="similarity_slider")
+        similarity_threshold = st.sidebar.slider("類似度の閾値", 0.0, 1.0, 0.7, 0.05, key="similarity_slider")
     # 検索実行ボタン (キー 'search_button')
     search_button = st.sidebar.button("検索実行", key="search_button")
 
