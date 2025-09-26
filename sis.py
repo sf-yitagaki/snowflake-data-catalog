@@ -17,13 +17,11 @@ logging.basicConfig(level=logging.INFO) # INFOレベル以上のログメッセ�
 logger = logging.getLogger(__name__) # このモジュール用のロガーを取得
 
 # LLMモデルとEmbeddingモデル ワークシート(要件に合わせて変更)
-DEFAULT_LLM_MODEL = 'claude-3-5-sonnet' # デフォルトで使用するLLMモデル名
-DEFAULT_EMBEDDING_MODEL = 'multilingual-e5-large' # 使用するテキスト埋め込みモデル名
+DEFAULT_LLM_MODEL = "claude-4-sonnet" # デフォルトで使用するLLMモデル名
+DEFAULT_EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0' # 使用するテキスト埋め込みモデル名
 # 備考: 使用するモデルはSnowflake環境で利用可能なものを指定してください。
 
 EMBEDDING_DIMENSION = 1024 # Embedding ベクトルの次元数 (使用するモデルに合わせる)
-# 使用する Snowflake Cortex Embed Text 関数の名前を動的に設定
-EMBED_FUNCTION_NAME = f"SNOWFLAKE.CORTEX.EMBED_TEXT_{EMBEDDING_DIMENSION}" # モデルの次元数に合わせて関数名が変わる想定
 
 # --- Snowflake接続 ---
 try:
@@ -56,13 +54,11 @@ METADATA_TABLE_NAME = "DATA_CATALOG_METADATA"
 SELECT_OPTION = "<Select>"
 ### 選択可能なLLMモデルのリスト定義 ###
 AVAILABLE_LLM_MODELS = [
-    'claude-3-5-sonnet',
-    'llama4-maverick',
-    'mistral-large2', 
-    'gemma-7b',
-    'llama3.1-8b',
-    'llama3.1-70b', 
-    'snowflake-arctic',
+    "claude-4-sonnet",
+    "openai-gpt-4.1",
+    "openai-o4-mini",
+    "llama4-maverick",
+    "deepseek-r1",
 ]
 
 # --- メタデータテーブル管理 ---
@@ -100,6 +96,18 @@ def create_metadata_table():
         session.sql(ddl).collect()
         # 成功ログを出力
         logger.info(f"{METADATA_TABLE_NAME} テーブルの存在を確認または作成しました。")
+        
+        # EMBEDDING_MODELカラムを追加（既に存在する場合はエラーを無視）
+        try:
+            add_column_ddl = f"""
+            ALTER TABLE {METADATA_TABLE_NAME} 
+            ADD COLUMN embedding_model VARCHAR(255) DEFAULT '{DEFAULT_EMBEDDING_MODEL}'
+            """
+            session.sql(add_column_ddl).collect()
+            logger.info(f"{METADATA_TABLE_NAME} にembedding_modelカラムを追加しました。")
+        except Exception as e:
+            # カラムが既に存在する場合など、エラーは無視
+            logger.debug(f"embedding_modelカラム追加をスキップ: {e}")
         # 成功した場合は True を返す
         return True
     except SnowparkSQLException as e:
@@ -566,6 +574,14 @@ def update_metadata(database_name, schema_name, table_name, data_dict):
                  # INSERT 時は embedding 列を含めない (テーブル定義のデフォルト=NULLが使われる)
                  logger.warning(f"Embedding for {table_name} is None or not a list, setting to NULL.")
 
+        # 'EMBEDDING_MODEL' が data_dict に含まれる場合
+        if 'EMBEDDING_MODEL' in data_dict:
+            update_clauses.append("embedding_model = source.embedding_model") # UPDATE句
+            insert_cols.append("embedding_model")                             # INSERTカラム
+            insert_vals.append("source.embedding_model")                      # INSERT値
+            source_cols.append("? AS embedding_model")                        # USING句
+            params_dynamic.append(data_dict['EMBEDDING_MODEL'])               # パラメータ
+
         # 'LIKES_INCREMENT' が data_dict に含まれ、True の場合 (いいねボタン用)
         if 'LIKES_INCREMENT' in data_dict and data_dict['LIKES_INCREMENT']:
             # UPDATE句で既存の likes 値に 1 を加算 (target.likes を参照)
@@ -806,6 +822,150 @@ def get_monthly_access_count(database_name, schema_name, table_name):
 
 
 # --- LLM連携関数 ---
+
+# サンプルデータを取得する関数
+@st.cache_data(ttl=3600) # 結果を1時間キャッシュ
+def get_table_sample_data(database_name, schema_name, table_name, sample_rows=3):
+    """
+    指定されたテーブルからサンプルデータを取得します。
+    Args:
+        database_name (str): データベース名。
+        schema_name (str): スキーマ名。
+        table_name (str): テーブル名。
+        sample_rows (int): 取得するサンプル行数。
+    Returns:
+        dict: {'sample_data': list, 'column_stats': dict} 形式の辞書。
+              エラー時は空の辞書。
+    """
+    # 識別子の安全性チェック
+    if not is_safe_identifier(database_name) or \
+       not is_safe_identifier(schema_name) or \
+       not is_safe_identifier(table_name):
+        st.error(f"不正な識別子が含まれています: DB={database_name}, SC={schema_name}, TBL={table_name}")
+        logger.error(f"get_table_sample_data: 不正な識別子 DB={database_name}, SC={schema_name}, TBL={table_name}")
+        return {}
+
+    try:
+        table_path = f"{database_name}.{schema_name}.{table_name}"
+        
+        # サンプルデータを取得
+        sample_query = f"SELECT * FROM {table_path} LIMIT ?"
+        sample_result = session.sql(sample_query, params=[sample_rows]).collect()
+        
+        # サンプルデータを辞書のリストに変換
+        sample_data = []
+        if sample_result:
+            # カラム名を取得（最初の行のキーから）
+            column_names = list(sample_result[0].as_dict().keys()) if sample_result else []
+            
+            for row in sample_result:
+                row_dict = row.as_dict()
+                # 長い値は切り詰める
+                truncated_row = {}
+                for col, val in row_dict.items():
+                    if val is not None:
+                        str_val = str(val)
+                        truncated_row[col] = str_val[:50] + "..." if len(str_val) > 50 else str_val
+                    else:
+                        truncated_row[col] = "NULL"
+                sample_data.append(truncated_row)
+        
+        # 基本統計情報を取得
+        stats_query = f"""
+        SELECT 
+            COUNT(*) as total_rows
+        FROM {table_path}
+        """
+        stats_result = session.sql(stats_query).collect()
+        
+        column_stats = {}
+        if stats_result:
+            stats_row = stats_result[0].as_dict()
+            column_stats = {
+                'total_rows': stats_row.get('TOTAL_ROWS', 0)
+            }
+        
+        logger.info(f"サンプルデータ取得成功: {table_path}, サンプル行数: {len(sample_data)}")
+        return {
+            'sample_data': sample_data,
+            'column_stats': column_stats
+        }
+        
+    except SnowparkSQLException as e:
+        if "does not exist or not authorized" in str(e):
+            logger.warning(f"テーブルが見つからないか権限がありません: {database_name}.{schema_name}.{table_name}")
+        else:
+            logger.error(f"サンプルデータ取得エラー ({database_name}.{schema_name}.{table_name}): {e}")
+            st.warning(f"テーブル '{database_name}.{schema_name}.{table_name}' のサンプルデータ取得中にエラーが発生しました: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"予期せぬエラー (get_table_sample_data): {e}")
+        return {}
+
+# 生成されたコメントをテーブルに反映する関数
+def update_table_comment(database_name, schema_name, table_name, new_comment, overwrite_mode='SKIP'):
+    """
+    生成されたコメントを実際のテーブルのCOMMENTに反映します。
+    Args:
+        database_name (str): データベース名。
+        schema_name (str): スキーマ名。
+        table_name (str): テーブル名。
+        new_comment (str): 新しいコメント。
+        overwrite_mode (str): 'SKIP', 'OVERWRITE', 'APPEND' のいずれか。
+    Returns:
+        bool: 成功した場合は True、失敗した場合は False。
+    """
+    # 識別子の安全性チェック
+    if not is_safe_identifier(database_name) or \
+       not is_safe_identifier(schema_name) or \
+       not is_safe_identifier(table_name):
+        st.error(f"不正な識別子が含まれています: DB={database_name}, SC={schema_name}, TBL={table_name}")
+        logger.error(f"update_table_comment: 不正な識別子 DB={database_name}, SC={schema_name}, TBL={table_name}")
+        return False
+
+    try:
+        table_path = f"{database_name}.{schema_name}.{table_name}"
+        
+        # 既存のテーブルコメントを取得
+        existing_comment_query = f"""
+        SELECT COMMENT 
+        FROM {database_name}.INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+        """
+        existing_result = session.sql(existing_comment_query, params=[schema_name, table_name]).collect()
+        existing_comment = existing_result[0][0] if existing_result and existing_result[0][0] else ''
+        
+        # 更新すべきかどうかを判定
+        should_update = True
+        if existing_comment and overwrite_mode == 'SKIP':
+            logger.info(f"テーブルコメント: 既存のコメントがあるためスキップ ({table_path})")
+            return True  # スキップは成功として扱う
+        
+        # 最終的なコメントを決定
+        if overwrite_mode == 'APPEND' and existing_comment:
+            final_comment = f"{existing_comment} {new_comment}"
+        else:
+            final_comment = new_comment
+        
+        # SQL文字列のエスケープ処理
+        escaped_comment = final_comment.replace("'", "''")
+        
+        # テーブルコメントを更新
+        update_query = f"ALTER TABLE {table_path} SET COMMENT = ?"
+        session.sql(update_query, params=[final_comment]).collect()
+        
+        logger.info(f"テーブルコメント更新成功: {table_path} ({overwrite_mode}モード)")
+        return True
+        
+    except SnowparkSQLException as e:
+        logger.error(f"テーブルコメント更新エラー ({database_name}.{schema_name}.{table_name}): {e}")
+        st.warning(f"テーブルコメントの更新中にエラーが発生しました: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"予期せぬエラー (update_table_comment): {e}")
+        st.error(f"テーブルコメント更新中に予期せぬエラーが発生しました: {e}")
+        return False
+
 @st.cache_data(ttl=3600) # 結果を1時間キャッシュ
 def get_table_schema(database_name, schema_name, table_name):
     """
@@ -873,7 +1033,7 @@ def get_table_schema(database_name, schema_name, table_name):
 # LLMを使用してテーブルコメントと分析アイデアを生成する関数
 def generate_comment_and_ideas(database_name, schema_name, table_name, source_table_comment, model=DEFAULT_LLM_MODEL): # model引数はそのまま
     """
-    Snowflake Cortex LLM 関数 (`SNOWFLAKE.CORTEX.COMPLETE`) を使用して、
+    Snowflake AI_COMPLETE 関数 (`AI_COMPLETE`) を使用して、
     テーブルスキーマと既存コメントに基づき、簡潔なテーブルコメントと分析アイデアを生成します。
     Args:
         database_name (str): データベース名。
@@ -908,61 +1068,104 @@ def generate_comment_and_ideas(database_name, schema_name, table_name, source_ta
             # Markdown テーブル形式で追記
             schema_text += f"{col_name} | {data_type} | {nullable} | {comment_str}\n"
 
+        # サンプルデータを取得
+        sample_info = get_table_sample_data(database_name, schema_name, table_name, sample_rows=3)
+        sample_text = ""
+        if sample_info.get('sample_data'):
+            sample_text += f"\nサンプルデータ ({len(sample_info['sample_data'])}行):\n"
+            for i, row_data in enumerate(sample_info['sample_data']):
+                row_values = [f"{k}: {v}" for k, v in list(row_data.items())[:4]]  # 最初の4カラムのみ表示
+                sample_text += f"行{i+1}: {', '.join(row_values)}\n"
+            
+            # 統計情報も追加
+            if sample_info.get('column_stats'):
+                stats = sample_info['column_stats']
+                sample_text += f"\n統計情報: 総行数={stats.get('total_rows', 'N/A')}\n"
+
         # 元のテーブルコメントが存在すれば、プロンプトに追加
         source_comment_text = f"\n既存のテーブルコメント: {source_table_comment}" if source_table_comment and pd.notna(source_table_comment) else ""
 
-        # LLMへの指示 (プロンプト) を作成
+        # テーブル固有の識別子を生成（一意性向上のため）
+        table_identifier = f"{database_name}.{schema_name}.{table_name}".upper()
+        column_count = len(schema_df)
+        primary_columns = schema_df['COLUMN_NAME'].head(3).tolist()  # 最初の3カラム名
+        
+        # LLMへの指示 (プロンプト) を作成 - より具体的で一意性の高いプロンプトに改善
         prompt = f"""
         あなたはデータカタログ作成を支援するAIです。
-        以下のテーブルスキーマ情報と既存コメントに基づいて、このテーブルがどのようなデータを持っているかの「簡潔なテーブルコメント(100字以内)」と、このテーブルデータを使った具体的な「分析アイデア/ユースケース」を3つ提案してください。
+        
+        **重要**: テーブル名「{table_identifier}」に基づいて、このテーブル固有の特徴を反映した説明を作成してください。汎用的な説明ではなく、このテーブルの具体的な用途と内容を表現してください。
 
-        テーブル名: {database_name}.{schema_name}.{table_name}
+        テーブル情報:
+        - 完全修飾名: {table_identifier}
+        - カラム数: {column_count}個
+        - 主要カラム: {', '.join(primary_columns)}
         {source_comment_text}
 
-        スキーマ情報:
+        詳細スキーマ:
         ```sql
         {schema_text}
         ```
 
-        応答は以下のJSON形式で、「簡潔なテーブルコメント(table_comment)」と「分析アイデア(analysis_ideas)」のみを日本語で返してください。他のテキストは含めないでください。
+        {sample_text}
 
+        **指示**: 
+        1. table_commentは、このテーブル名とカラム構成から推測される具体的な用途を80-100字で説明
+        2. analysis_ideasは、このテーブルの特定のカラムやデータ構造を活用した現実的な分析例を3つ
+        3. 同じようなコメントにならないよう、テーブル名の業務領域を反映した内容にする
+
+        JSON形式で応答（他のテキスト不要）:
         {{
-        "table_comment": "(ここにテーブルデータの簡潔な説明を100字以内で記述)",
+        "table_comment": "{table_name}テーブルの具体的な説明（業務用途、データ内容、期間など含む）",
         "analysis_ideas": [
-        "(ここに分析アイデア/ユースケース1を具体的に記述)",
-        "(ここに分析アイデア/ユースケース2を具体的に記述)",
-        "(ここに分析アイデア/ユースケース3を具体的に記述)"
+        "カラム名を具体的に使った分析例1",
+        "データの時系列/集計を活用した分析例2", 
+        "このテーブル特有のビジネス価値を示す分析例3"
         ]
         }}
         """
-        # Snowflake Cortex Complete関数を呼び出すSQL
-        # 第一引数にモデル名、第二引数にプロンプトを渡す
-        sql_query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE(?, ?)"
-        # SQLに渡すパラメータリスト (model引数を使用)
-        params = [model, prompt]
+        # Snowflake AI_COMPLETE関数を呼び出すSQL
+        # より多様な応答を得るため、temperatureパラメータを追加
+        # AI_COMPLETE関数では第3引数にオプションをJSONで指定可能
+        sql_query = f"SELECT AI_COMPLETE(?, ?, PARSE_JSON(?))"
+        # temperatureを0.7に設定して創造性と一貫性のバランスを取る
+        ai_options = '{"temperature": 0.7}'
+        # SQLに渡すパラメータリスト (model, prompt, options)
+        params = [model, prompt, ai_options]
 
         try:
             # LLM呼び出し開始のログ (使用モデル名も出力)
-            logger.info(f"Cortex Complete呼び出し開始 ({database_name}.{schema_name}.{table_name}), model={model}") # SQLクエリは冗長なので省略
+            logger.info(f"AI_COMPLETE呼び出し開始 ({database_name}.{schema_name}.{table_name}), model={model}") # SQLクエリは冗長なので省略
             # SQLを実行し、結果を取得 (collect() は通常リストを返す)
             response = session.sql(sql_query, params=params).collect()
             # LLM呼び出し完了のログ
-            logger.info(f"Cortex Complete呼び出し完了 ({database_name}.{schema_name}.{table_name}), model={model}")
+            logger.info(f"AI_COMPLETE呼び出し完了 ({database_name}.{schema_name}.{table_name}), model={model}")
 
-            # 結果の処理 (response は [Row(SNOWFLAKE.CORTEX.COMPLETE(?, ?)=result_string)] のような形)
+            # 結果の処理 (response は [Row(AI_COMPLETE(?, ?)=result_string)] のような形)
             if response and response[0] and response[0][0]:
                 # 最初の行の最初の列にある応答文字列を取得
                 result_json_str = response[0][0]
 
                 # --- LLM応答からJSON部分を抽出する処理 ---
-                # 応答がマークダウンのコードブロック (```json ... ```) で囲まれている場合や、
-                # JSONオブジェクトが直接返される場合に対応
+                # AI_COMPLETE関数は改行やエスケープ文字を含む文字列として返すため、
+                # 適切にJSON部分を抽出する
                 try:
-                    # まず ```json ... ``` 形式を探す
-                    json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', result_json_str, re.DOTALL | re.IGNORECASE)
+                    # まず基本的なエスケープシーケンスのみを置換（日本語文字は保護）
+                    if isinstance(result_json_str, str):
+                        # 基本的なエスケープシーケンスのみを処理
+                        # バッグ用: 置換前の文字列を確認
+                        
+                        result_json_str = result_json_str.replace('\\n', '\n')
+                        result_json_str = result_json_str.replace('\\t', '\t')
+                        result_json_str = result_json_str.replace('\\"', '"')
+                        result_json_str = result_json_str.replace('\\\\', '\\')
+                        
+                    
+                    # ```json ... ``` 形式を探す（改行を考慮）
+                    json_match = re.search(r'```json\s*(\{.*?\})\s*```', result_json_str, re.DOTALL | re.IGNORECASE)
                     if json_match:
-                        # マッチしたグループの中から中身がある方 (JSON部分) を取得
-                        result_json_str = next(g for g in json_match.groups() if g is not None)
+                        # マッチしたJSON部分を取得
+                        result_json_str = json_match.group(1)
                     else:
                         # ```json ... ``` がない場合、最初と最後の波括弧を探して抽出を試みる
                         start_index = result_json_str.find('{')
@@ -1030,9 +1233,9 @@ def generate_comment_and_ideas(database_name, schema_name, table_name, source_ta
             logger.error(f"LLM呼び出しエラー ({database_name}.{schema_name}.{table_name}, model={model}): {e}", exc_info=True) # SQLクエリはログ出力省略推奨
             # モデルが見つからない場合のエラーメッセージをより具体的に
             if "Invalid argument" in str(e) and model in str(e):
-                st.error(f"LLM (Complete) 呼び出しエラー: モデル '{model}' が無効または利用できません。エラー: {e}")
+                st.error(f"LLM (AI_COMPLETE) 呼び出しエラー: モデル '{model}' が無効または利用できません。エラー: {e}")
             else:
-                st.error(f"LLM (Complete) 呼び出し中にSQLエラーが発生しました (model: {model})。ログを確認してください。エラー: {e}")
+                st.error(f"LLM (AI_COMPLETE) 呼び出し中にSQLエラーが発生しました (model: {model})。ログを確認してください。エラー: {e}")
             # 失敗を示す None を返す
             return None, None
     except Exception as e:
@@ -1060,20 +1263,20 @@ def generate_embedding(text, model=DEFAULT_EMBEDDING_MODEL):
         logger.warning("ベクトル生成のための有効なテキストがありません。")
         return None # 無効な場合は None を返す
 
-    # Snowflake Cortex Embed Text 関数を呼び出す SQL
-    # 第一引数にモデル名、第二引数にテキストを渡す
-    # 関数名は EMBED_FUNCTION_NAME 定数を使用 (次元数を含む)
-    sql_query = f"SELECT {EMBED_FUNCTION_NAME}(?, ?)"
+    # Snowflake AI_EMBED 関数を呼び出す SQL
+    # 注意: AI_EMBED関数では第1引数（モデル名）は文字列リテラルである必要がある
+    # 第一引数にモデル名（リテラル）、第二引数にテキスト（パラメータ）を渡す
+    sql_query = f"SELECT AI_EMBED('{model}', ?)"
     # SQLに渡すパラメータリスト
-    params = [model, text]
+    params = [text]
 
     try:
         # ベクトル生成呼び出し開始のログ (モデル名、関数名)
-        logger.info(f"Cortex Embed呼び出し開始 (model={model}, func={EMBED_FUNCTION_NAME})") # SQLクエリ省略
+        logger.info(f"AI_EMBED呼び出し開始 (model={model})") # SQLクエリ省略
         # SQLを実行し、結果を取得 (collect() はリストを返す)
         result_df = session.sql(sql_query, params=params).collect()
         # ベクトル生成呼び出し完了のログ
-        logger.info(f"Cortex Embed呼び出し完了")
+        logger.info(f"AI_EMBED呼び出し完了")
 
         # 結果の処理 (response は [Row(EMBED_TEXT...(...)=vector_list)] のような形)
         if result_df and result_df[0] and result_df[0][0]:
@@ -1110,12 +1313,12 @@ def generate_embedding(text, model=DEFAULT_EMBEDDING_MODEL):
             return None # 失敗として None を返す
     except SnowparkSQLException as e:
         # ベクトル生成 (session.sql) でSQLエラーが発生した場合
-        logger.error(f"ベクトル生成中にSnowpark SQLエラーが発生しました (model={model}, func={EMBED_FUNCTION_NAME}): {e}", exc_info=True) # SQLクエリ省略
+        logger.error(f"ベクトル生成中にSnowpark SQLエラーが発生しました (model={model}): {e}", exc_info=True) # SQLクエリ省略
         # エラーの種類に応じて、より具体的なメッセージをUIに表示
         # 関数が見つからない、または権限がないエラー
         if "invalid identifier" in str(e) or "does not exist or not authorized" in str(e):
-             logger.error(f"Cortex関数 {EMBED_FUNCTION_NAME} の呼び出しエラー: {e}")
-             st.error(f"ベクトル生成関数({EMBED_FUNCTION_NAME})が見つからないか、権限がありません。")
+             logger.error(f"AI_EMBED関数の呼び出しエラー: {e}")
+             st.error(f"ベクトル生成関数(AI_EMBED)が見つからないか、権限がありません。")
         # 指定されたモデルが存在しないエラー (エラーメッセージは環境による可能性あり)
         elif "Invalid argument" in str(e) and model in str(e):
             logger.error(f"指定されたモデル '{model}' が見つかりません: {e}")
@@ -1134,12 +1337,13 @@ def generate_embedding(text, model=DEFAULT_EMBEDDING_MODEL):
 
 
 # LLMによるメタデータ (コメント、アイデア、ベクトル) を生成し、保存する関数
-def generate_and_save_ai_metadata(database_name, schema_name, table_name, source_table_comment, model=DEFAULT_LLM_MODEL):
+def generate_and_save_ai_metadata(database_name, schema_name, table_name, source_table_comment, model=DEFAULT_LLM_MODEL, apply_to_table=False, overwrite_mode='SKIP'):
     """
     指定されたテーブルについて、以下の処理を実行します:
-    1. LLMでテーブルコメントと分析アイデアを生成 (`generate_comment_and_ideas`) - 指定されたモデルを使用
+    1. LLMでテーブルコメントと分析アイデアを生成 (`generate_comment_and_ideas`) - 指定されたモデルを使用、サンプルデータも考慮
     2. 生成されたコメントに基づいてベクトル表現を生成 (`generate_embedding`)
     3. 生成されたメタデータをメタデータテーブルに保存 (`update_metadata`)
+    4. (オプション) 生成されたコメントを実際のテーブルのCOMMENTに反映 (`update_table_comment`)
     処理の進行状況を Streamlit のスピナーで表示します。
     Args:
         database_name (str): データベース名。
@@ -1147,6 +1351,8 @@ def generate_and_save_ai_metadata(database_name, schema_name, table_name, source
         table_name (str): テーブル名。
         source_table_comment (str or None): 元のテーブルコメント。
         model (str): 使用するLLMモデル名。
+        apply_to_table (bool): 生成されたコメントを実際のテーブルに反映するかどうか。
+        overwrite_mode (str): テーブルコメント更新モード ('SKIP', 'OVERWRITE', 'APPEND')。
     Returns:
         bool: 全ての処理が成功した場合は True、いずれかで失敗した場合は False。
     """
@@ -1195,7 +1401,8 @@ def generate_and_save_ai_metadata(database_name, schema_name, table_name, source
         update_data = {
             "TABLE_COMMENT": generated_comment, # AIが生成したコメント (失敗文字列の場合もある)
             "ANALYSIS_IDEAS": json.dumps(ideas, ensure_ascii=False), # アイデアリストをJSON文字列に変換して保存
-            "EMBEDDING": embedding # 生成されたベクトル (Noneの場合もある)
+            "EMBEDDING": embedding, # 生成されたベクトル (Noneの場合もある)
+            "EMBEDDING_MODEL": DEFAULT_EMBEDDING_MODEL if embedding else None # 使用したモデル名（ベクトルが生成された場合のみ）
             # LIKES はこの関数では更新しない (いいねボタンで更新)
             # SOURCE_TABLE_COMMENT は情報スキーマから取得するものなので、ここでは保存しない
         }
@@ -1204,15 +1411,29 @@ def generate_and_save_ai_metadata(database_name, schema_name, table_name, source
         # spinner は with ブロック終了時に自動で消える
         save_successful = update_metadata(database_name, schema_name, table_name, update_data)
 
+        # 4. オプション: 生成されたコメントを実際のテーブルに反映
+        table_comment_applied = True  # デフォルトは成功
+        if apply_to_table and generated_comment and "生成失敗" not in str(generated_comment):
+            logger.info(f"{database_name}.{schema_name}.{table_name}: テーブルコメントを実際のテーブルに反映中...")
+            table_comment_applied = update_table_comment(database_name, schema_name, table_name, generated_comment, overwrite_mode)
+
     # 保存処理の結果に基づいてメッセージを表示
-    if save_successful:
-        st.success(f"'{table_name}' のメタデータ (コメント, アイデア, ベクトル) を生成・保存しました。")
+    if save_successful and table_comment_applied:
+        success_msg = f"'{table_name}' のメタデータ (コメント, アイデア, ベクトル) を生成・保存しました。"
+        if apply_to_table:
+            success_msg += f" テーブルコメントも反映しました ({overwrite_mode}モード)。"
+        st.success(success_msg)
         # キャッシュクリア (get_all_metadata などが最新情報を反映するように)
         st.cache_data.clear()
         return True # 成功
     else:
-        # update_metadata 内でエラーが表示されているはずだが、念のため
-        st.error(f"'{table_name}' のメタデータ保存に失敗しました。")
+        # エラーメッセージを生成
+        error_msg = f"'{table_name}' の処理に失敗しました。"
+        if not save_successful:
+            error_msg += " メタデータ保存に失敗。"
+        if apply_to_table and not table_comment_applied:
+            error_msg += " テーブルコメント反映に失敗。"
+        st.error(error_msg)
         return False # 失敗
 
 
@@ -1586,13 +1807,13 @@ def display_table_card(table_info, metadata):
                  # 失敗したらエラーメッセージを表示
                  st.error("いいねの更新に失敗しました。")
 
-    # --- 検索類似度 (キーワード検索時にあれば表示) ---
+    # --- 検索類似度 (ベクトル検索時にあれば表示) ---
     # table_info 辞書から 'search_similarity' キーの値を取得
     search_similarity = table_info.get('search_similarity')
     # 値が存在し、かつ NaN でない場合のみ表示
     if search_similarity is not None and pd.notna(search_similarity):
-         # キャプションとして類似度をパーセント表示
-         card.caption(f"検索キーワードとの関連度: {search_similarity:.2%}")
+         # シンプルなパーセント表記のみ
+         card.caption(f"ベクトル類似度: {search_similarity:.1%}")
 
     # --- LLMによるテーブル概要  --- 
     # メタデータからLLM生成コメントを取得 (なければ None)
@@ -1611,12 +1832,22 @@ def display_table_card(table_info, metadata):
         # メタデータ未生成の場合、LLM生成ボタンを表示
         # 元のテーブルコメント (source_table_comment) を取得試行 (プロンプト用)
         source_comment_orig = table_info.get('SOURCE_TABLE_COMMENT')
-        # LLM生成ボタン (ユニークなキーを設定)
-        if card.button("LLMで概要と分析アイデアを生成", key=f"gen_ai_{elem_key_base}"):
-             # AIメタデータ生成・保存関数を呼び出し (デフォルトモデルを使用)
-             generate_and_save_ai_metadata(db_name, sc_name, tbl_name, source_comment_orig) # model引数はデフォルト
-             # 処理完了後、表示を更新するために再実行
-             st.rerun()
+        # LLM生成ボタンと設定 (カラムで横並び)
+        gen_col1, gen_col2 = card.columns([0.6, 0.4])
+        with gen_col1:
+            # LLM生成ボタン (ユニークなキーを設定)
+            if card.button("LLMで概要と分析アイデアを生成", key=f"gen_ai_{elem_key_base}"):
+                # 簡易設定: テーブルコメント反映は無効、デフォルトモデル使用
+                generate_and_save_ai_metadata(db_name, sc_name, tbl_name, source_comment_orig, apply_to_table=False, overwrite_mode='SKIP')
+                # 処理完了後、表示を更新するために再実行
+                st.rerun()
+        with gen_col2:
+            # テーブルコメント反映のトグル (個別生成用)
+            apply_individual = card.checkbox("テーブルに反映", key=f"apply_individual_{elem_key_base}", help="生成されたコメントをテーブルのCOMMENTに反映します")
+            if apply_individual and card.button("詳細生成", key=f"gen_ai_detail_{elem_key_base}"):
+                # 詳細設定版: テーブルコメント反映を有効化
+                generate_and_save_ai_metadata(db_name, sc_name, tbl_name, source_comment_orig, apply_to_table=True, overwrite_mode='OVERWRITE')
+                st.rerun()
 
     # --- 詳細表示 (Expander) ---
     # Expander を使って詳細情報を折りたたみ表示
@@ -1666,16 +1897,6 @@ def display_table_card(table_info, metadata):
             st.caption("未生成 (概要と同時に生成されます)")
 
         st.divider() # 区切り線
-
-        # --- 元のテーブルコメント (INFORMATION_SCHEMA) ---
-        # table_info から元のコメントを取得
-        source_comment_display = table_info.get('SOURCE_TABLE_COMMENT')
-        # コメントが存在し、かつ NaN でない場合
-        if source_comment_display and pd.notna(source_comment_display):
-            st.markdown("**元のテーブルコメント (Information Schema):**")
-            # キャプションで表示
-            st.caption(source_comment_display)
-            st.divider() # 区切り線
 
         # --- アクセス数とテーブル情報 ---
         # カラムを使ってアクセス数とその他の情報を横に並べる
@@ -1855,15 +2076,66 @@ def main_page():
 
     # --- サイドバー (検索 & フィルター) ---
     st.sidebar.header("1. 検索 & フィルター")
+    
+    # 検索例の表示
+    with st.sidebar.expander("💡 検索のコツとサンプル"):
+        st.write("**効果的な検索キーワード例:**")
+        st.write("• 業務領域: `売上`, `顧客`, `財務`, `在庫`")
+        st.write("• データ種別: `履歴`, `マスタ`, `集計`, `ログ`")  
+        st.write("• 期間: `日次`, `月次`, `年次`")
+        st.write("• 分析用途: `分析`, `レポート`, `KPI`")
+        st.write("")
+        st.write("**検索テクニック:**")
+        st.write("• ハイブリッド検索で最高の精度")
+        st.write("• 類似度閾値を調整して結果を絞り込み")
+        st.write("• 業務用語を使うとベクトル検索が効果的")
+    
     # キーワード検索入力欄 (キー 'search_input')
-    search_term = st.sidebar.text_input("キーワード検索 (全テーブル対象)", key="search_input")
-    # ベクトル検索有効化トグル (キー 'search_vector_toggle')
-    search_vector = st.sidebar.toggle("ベクトル検索を有効にする", value=True, help=f"検索語とLLM生成コメントのベクトル類似度({DEFAULT_EMBEDDING_MODEL}, {EMBEDDING_DIMENSION}次元)で検索します。", key="search_vector_toggle")
-    # ベクトル検索時の類似度閾値 (デフォルト 0.7)
-    similarity_threshold = 0.7
-    # ベクトル検索が有効な場合のみスライダーを表示 (キー 'similarity_slider')
+    search_term = st.sidebar.text_input(
+        "キーワード検索 (全テーブル対象)", 
+        key="search_input",
+        placeholder="例: 売上 顧客 分析"
+    )
+    
+    # 検索語の妥当性チェックと提案
+    if search_term:
+        # 日本語の挨拶や一般的な単語をチェック
+        non_business_terms = ["こんにちは", "おはよう", "お疲れ", "ありがとう", "test", "テスト", "あいうえお", "abc", "123"]
+        if search_term.lower() in [term.lower() for term in non_business_terms]:
+            st.sidebar.info("💡 **検索のヒント**: より具体的な業務用語をお試しください")
+            
+            # 業務関連の提案を表示
+            suggestions = ["売上", "顧客", "商品", "注文", "在庫", "財務", "ユーザー", "ログ", "集計", "分析"]
+            cols = st.sidebar.columns(2)
+            for i, suggestion in enumerate(suggestions[:6]):
+                col = cols[i % 2]
+                if col.button(f"🔍 {suggestion}", key=f"suggest_{suggestion}"):
+                    st.session_state['search_input'] = suggestion
+                    st.rerun()
+    # 検索モード選択
+    search_mode = st.sidebar.radio(
+        "検索モード",
+        ["キーワード検索のみ", "ベクトル検索のみ", "ハイブリッド検索（推奨）"],
+        index=2,  # デフォルトはハイブリッド検索
+        help="ハイブリッド検索はキーワード検索とベクトル検索の結果を組み合わせて、より精度の高い検索を提供します。",
+        key="search_mode_radio"
+    )
+    
+    # 検索モードに基づいてフラグを設定
+    search_vector = search_mode in ["ベクトル検索のみ", "ハイブリッド検索（推奨）"]
+    search_keyword = search_mode in ["キーワード検索のみ", "ハイブリッド検索（推奨）"]
+    
+    # ベクトル検索時の類似度閾値設定
+    similarity_threshold = 0.3
+    # ベクトル検索が有効な場合のみスライダーを表示
     if search_vector:
-        similarity_threshold = st.sidebar.slider("類似度の閾値", 0.0, 1.0, 0.7, 0.05, key="similarity_slider")
+        similarity_threshold = st.sidebar.slider(
+            "類似度の閾値", 
+            0.10, 1.0, 0.3, 0.05, 
+            key="similarity_slider", 
+            help="🎯高い値→厳密な関連性、🔍低い値→幅広い発見。0.3が推奨設定です。"
+        )
+
     # 検索実行ボタン (キー 'search_button')
     search_button = st.sidebar.button("検索実行", key="search_button")
 
@@ -1905,10 +2177,18 @@ def main_page():
         st.session_state['last_search_term'] = search_term
         # 検索中メッセージを表示
         status_placeholder.info("全テーブルを対象に検索を実行中...")
+        
+       
+        
         # 検索語を小文字に変換 (キーワード検索用)
         search_lower = search_term.lower()
         # 最終的な検索結果を格納する DataFrame
         final_results_df = pd.DataFrame()
+        
+        # 検索結果を格納する辞書（ハイブリッド検索用）
+        keyword_results_df = pd.DataFrame()
+        vector_results_df = pd.DataFrame()
+        
         # ベクトル検索を試みたかどうかのフラグ
         vector_search_executed = False
         # ベクトル検索SQLが成功したかどうかのフラグ
@@ -1922,10 +2202,10 @@ def main_page():
 
         try:
             # --- クエリで使用するカラムリスト ---
-            # メタデータテーブルから取得する基本カラム
+            # メタデータテーブルから取得する基本カラム (大文字に統一)
             select_columns_metadata = """
-                database_name, schema_name, table_name, table_comment,
-                analysis_ideas, likes, last_refreshed
+                DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, TABLE_COMMENT,
+                ANALYSIS_IDEAS, LIKES, LAST_REFRESHED
             """ # embeddingはベクトル検索時のみ直接使う
 
             # --- ベクトル検索が有効な場合の処理 ---
@@ -1943,37 +2223,38 @@ def main_page():
                 #    類似度で降順ソート (NULLS LAST で類似度がないものを最後に)
                 vector_search_sql = f"""
                 WITH search_vector AS (
-                    SELECT {EMBED_FUNCTION_NAME}(?, ?) as query_embedding
+                    SELECT AI_EMBED('snowflake-arctic-embed-l-v2.0', ?) as query_embedding
                 )
                 SELECT
-                    m.{select_columns_metadata.replace(',', ', m.')}, -- エイリアス m を追加
-                    VECTOR_COSINE_SIMILARITY(m.embedding, sv.query_embedding) as SIMILARITY
+                    m.DATABASE_NAME, m.SCHEMA_NAME, m.TABLE_NAME, m.TABLE_COMMENT,
+                    m.ANALYSIS_IDEAS, m.LIKES, m.LAST_REFRESHED,
+                    VECTOR_COSINE_SIMILARITY(m.EMBEDDING, sv.query_embedding) as SIMILARITY
                 FROM
                     {METADATA_TABLE_NAME} m, search_vector sv -- テーブルエイリアスを使用
                 WHERE
-                    m.embedding IS NOT NULL -- ベクトルが存在するもののみ
+                    m.EMBEDDING IS NOT NULL -- ベクトルが存在するもののみ
+                    AND (m.EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0' OR m.EMBEDDING_MODEL IS NULL) -- 同じモデルで生成されたベクトルのみ（古いデータでNULLの場合も含む）
                 ORDER BY
-                    similarity DESC NULLS LAST -- 類似度でソート
+                    SIMILARITY DESC NULLS LAST -- 類似度でソート
                 """
                 executed_sql = vector_search_sql # ログ用に保存
-                # パラメータ: 使用する Embedding モデル名、検索語
-                vector_params = [DEFAULT_EMBEDDING_MODEL, escaped_search_term]
+                # パラメータ: 検索語のみ（モデル名はSQLに直接埋め込み済み）
+                vector_params = [escaped_search_term]
 
                 logger.info(f"Executing vector search query (using CTE)") # SQL自体はログに出さない方が安全な場合も
-                logger.debug(f"Vector search params: {[DEFAULT_EMBEDDING_MODEL, '<search_term>']}") # 検索語はマスク
+                logger.debug(f"Vector search params: ['<search_term>']") # 検索語はマスク
 
                 # ベクトル検索SQLを実行し、結果を DataFrame に取得
-                vector_results_df = session.sql(vector_search_sql, params=vector_params).to_pandas()
+                vector_results_raw = session.sql(vector_search_sql, params=vector_params).to_pandas()
                 vector_search_succeeded = True # SQL実行自体は成功
-                logger.info(f"Vector search query returned {len(vector_results_df)} results.")
-                logger.debug(f"Vector search results columns: {vector_results_df.columns.tolist()}")
-
+                logger.info(f"Vector search query returned {len(vector_results_raw)} results.")
+                
                 # --- Python側でのフィルタリング (類似度閾値) ---
                 status_placeholder.text("検索結果をフィルタリング中...") # メッセージ更新
                 filtered_rows = [] # フィルタ後の行を格納するリスト
                 # 結果が存在し、'SIMILARITY' カラムがある場合
-                if not vector_results_df.empty and 'SIMILARITY' in vector_results_df.columns:
-                    for index, row in vector_results_df.iterrows():
+                if not vector_results_raw.empty and 'SIMILARITY' in vector_results_raw.columns:
+                    for index, row in vector_results_raw.iterrows():
                         # 類似度を取得 (NaNの場合は0とする)
                         similarity = row.get('SIMILARITY', 0.0)
                         similarity = similarity if pd.notna(similarity) else 0.0
@@ -1986,30 +2267,29 @@ def main_page():
                             filtered_rows.append(row_dict) # リストに追加
 
                     # フィルタ後の辞書リストから DataFrame を再作成
-                    final_results_df = pd.DataFrame(filtered_rows)
-                    # 必要なら再度ソート (SQLでソート済みのはずだが念のため)
-                    # if not final_results_df.empty:
-                    #     final_results_df = final_results_df.sort_values(by='search_similarity', ascending=False)
+                    vector_results_df = pd.DataFrame(filtered_rows)
+                    logger.info(f"Vector search filtered results: {len(vector_results_df)} items (threshold: {similarity_threshold})")
                 else:
-                     logger.warning("Vector search results missing 'SIMILARITY' column or empty.")
-                     final_results_df = pd.DataFrame() # 結果なし
+                    logger.warning("Vector search results missing 'SIMILARITY' column or empty.")
+                    vector_results_df = pd.DataFrame() # 結果なし
 
-            # --- ベクトル検索が無効な場合の処理 (キーワード検索のみ) ---
-            else:
+            # --- キーワード検索の実行 ---
+            if search_keyword:
                 # キーワード検索 SQL: DB名, スキーマ名, テーブル名, AIコメント, AIアイデア に LIKE 検索
                 # 類似度カラム (SIMILARITY) は NULL で追加し、列構造をベクトル検索と合わせる
                 keyword_search_sql = f"""
                 SELECT
-                    {select_columns_metadata}
-                    , NULL as SIMILARITY -- 類似度列をNULLで追加
+                    DATABASE_NAME, SCHEMA_NAME, TABLE_NAME, TABLE_COMMENT,
+                    ANALYSIS_IDEAS, LIKES, LAST_REFRESHED,
+                    NULL as SIMILARITY -- 類似度列をNULLで追加
                 FROM {METADATA_TABLE_NAME}
                 WHERE
                     (
-                        LOWER(database_name) LIKE ? OR LOWER(schema_name) LIKE ? OR
-                        LOWER(table_name) LIKE ? OR LOWER(table_comment) LIKE ? OR
-                        LOWER(analysis_ideas) LIKE ?
+                        LOWER(DATABASE_NAME) LIKE ? OR LOWER(SCHEMA_NAME) LIKE ? OR
+                        LOWER(TABLE_NAME) LIKE ? OR LOWER(TABLE_COMMENT) LIKE ? OR
+                        LOWER(ANALYSIS_IDEAS) LIKE ?
                     )
-                ORDER BY database_name, schema_name, table_name -- 名前順でソート
+                ORDER BY DATABASE_NAME, SCHEMA_NAME, TABLE_NAME -- 名前順でソート
                 """
                 executed_sql = keyword_search_sql # ログ用に保存
                 # LIKE検索用のパラメータ (%検索語%)
@@ -2019,11 +2299,23 @@ def main_page():
 
                 logger.info(f"Executing keyword search query") # SQL自体はログ非推奨
                 logger.debug(f"Keyword search params: {keyword_params}") # パラメータもマスク推奨
+                
+                # デバッグ: 実行するSQLを表示
+                st.sidebar.text("デバッグ: キーワード検索SQL実行中...")
+                st.sidebar.code(keyword_search_sql)
+                
                 # キーワード検索SQLを実行し、結果を DataFrame に取得
-                final_results_df = session.sql(keyword_search_sql, params=keyword_params).to_pandas()
-                logger.info(f"Keyword search query returned {len(final_results_df)} results.")
+                keyword_results_df = session.sql(keyword_search_sql, params=keyword_params).to_pandas()
+                logger.info(f"Keyword search query returned {len(keyword_results_df)} results.")
+                st.sidebar.success(f"キーワード検索結果: {len(keyword_results_df)} 件")
+                
+                # デバッグ: 結果の詳細を表示
+                if not keyword_results_df.empty:
+                    st.sidebar.write("キーワード検索結果サンプル:")
+                    st.sidebar.dataframe(keyword_results_df.head(2))
+                    
                 # 表示用の類似度列 'search_similarity' を追加し、None を設定
-                final_results_df['search_similarity'] = None
+                keyword_results_df['search_similarity'] = None
 
         # --- エラーハンドリング (SQL実行およびPython処理) ---
         except SnowparkSQLException as e:
@@ -2039,9 +2331,56 @@ def main_page():
         except Exception as e:
             status_placeholder.error(f"検索処理中に予期せぬエラーが発生しました: {e}")
             logger.error(f"Unexpected error during search: {e}", exc_info=True)
-            final_results_df = pd.DataFrame() # エラー時は空のDataFrame
+            keyword_results_df = pd.DataFrame() # エラー時は空のDataFrame
+            vector_results_df = pd.DataFrame()
+            
+        # --- ハイブリッド検索の結果統合 ---
+        if search_mode == "ハイブリッド検索（推奨）":
+            status_placeholder.text("検索結果を統合中...")
+            
+            # 両方の結果がある場合
+            if not keyword_results_df.empty and not vector_results_df.empty:
+                # テーブルの完全修飾名をキーとして結合
+                keyword_results_df['table_key'] = keyword_results_df['DATABASE_NAME'] + '.' + keyword_results_df['SCHEMA_NAME'] + '.' + keyword_results_df['TABLE_NAME']
+                vector_results_df['table_key'] = vector_results_df['DATABASE_NAME'] + '.' + vector_results_df['SCHEMA_NAME'] + '.' + vector_results_df['TABLE_NAME']
+                
+                # ベクトル検索の結果をベースに、キーワード検索結果とマージ
+                # ベクトル検索で見つかったものを優先し、キーワード検索のみの結果も追加
+                merged_results = vector_results_df.copy()
+                
+                # キーワード検索のみで見つかった結果を追加
+                keyword_only = keyword_results_df[~keyword_results_df['table_key'].isin(vector_results_df['table_key'])]
+                if not keyword_only.empty:
+                    final_results_df = pd.concat([merged_results, keyword_only], ignore_index=True)
+                else:
+                    final_results_df = merged_results
+                    
+                # table_keyカラムを削除
+                final_results_df = final_results_df.drop('table_key', axis=1)
+                
+                st.sidebar.success(f"ハイブリッド検索結果: {len(final_results_df)} 件 (ベクトル: {len(vector_results_df)}, キーワード追加: {len(keyword_only) if not keyword_only.empty else 0})")
+                
+            elif not vector_results_df.empty:
+                # ベクトル検索結果のみ
+                final_results_df = vector_results_df
+                st.sidebar.info("ベクトル検索結果のみを使用")
+            elif not keyword_results_df.empty:
+                # キーワード検索結果のみ
+                final_results_df = keyword_results_df
+                st.sidebar.info("キーワード検索結果のみを使用")
+            else:
+                # 両方とも結果なし
+                final_results_df = pd.DataFrame()
+                
+        elif search_mode == "ベクトル検索のみ":
+            final_results_df = vector_results_df
+        elif search_mode == "キーワード検索のみ":
+            final_results_df = keyword_results_df
+        else:
+            final_results_df = pd.DataFrame()
 
         # --- 検索結果をセッションステートに保存 ---
+        
         # DataFrame を辞書のリスト形式に変換して保存 (セッションステートに適した形式)
         if not final_results_df.empty:
             # final_results_df にはメタデータ情報のみ含まれるため、
@@ -2119,19 +2458,83 @@ def main_page():
             # セッションステートから検索結果データ (マージ済み辞書のリスト) を取得
             search_results_list = st.session_state.get('search_results_data', [])
 
-            # 検索結果の件数などの情報を表示
-            search_info = f"{len(search_results_list)} 件のテーブルが見つかりました。"
-            st.info(search_info)
+            # 検索結果の詳細情報を表示
+            search_info_col1, search_info_col2 = st.columns([0.7, 0.3])
+            
+            with search_info_col1:
+                # 基本的な件数情報
+                st.info(f"{len(search_results_list)} 件のテーブルが見つかりました。")
+                
+            with search_info_col2:
+                # ベクトル検索が実行された場合は類似度の統計情報を表示
+                if any(item.get('search_similarity') is not None for item in search_results_list):
+                    # 類似度がある結果のみを抽出
+                    similarity_scores = [item['search_similarity'] for item in search_results_list 
+                                       if item.get('search_similarity') is not None and pd.notna(item['search_similarity'])]
+                    
+                    if similarity_scores:
+                        import numpy as np
+                        avg_similarity = np.mean(similarity_scores)
+                        max_similarity = np.max(similarity_scores)
+                        min_similarity = np.min(similarity_scores)
+                        
+                        # 類似度統計を表示
+                        with st.expander("📊 類似度統計", expanded=False):
+                            col_stat1, col_stat2 = st.columns(2)
+                            with col_stat1:
+                                st.metric("平均類似度", f"{avg_similarity:.1%}")
+                                st.metric("最高類似度", f"{max_similarity:.1%}")
+                            with col_stat2:
+                                st.metric("最低類似度", f"{min_similarity:.1%}")
+                                st.metric("ベクトル結果", f"{len(similarity_scores)}件")
+                            
+                            # 類似度品質の評価とアドバイス
+                            if avg_similarity >= 0.85:
+                                st.success("🎯 **高品質な検索結果**: 検索語と強く関連するテーブルが見つかりました")
+                            elif avg_similarity >= 0.75:
+                                st.info("✅ **標準的な検索結果**: 適度に関連するテーブルが見つかりました")
+                            else:
+                                st.warning("💡 **検索精度向上のヒント**: より具体的な業務用語をお試しください")
+                                st.caption("• テーブル名やカラム名に関連する用語を使用\n• 業務領域を明確にした検索語を試行")
+                            
+                            # 類似度分布の可視化（簡易）
+                            score_ranges = {
+                                "高関連 (≥90%)": len([s for s in similarity_scores if s >= 0.9]),
+                                "中関連 (80-89%)": len([s for s in similarity_scores if 0.8 <= s < 0.9]),
+                                "低関連 (70-79%)": len([s for s in similarity_scores if 0.7 <= s < 0.8]),
+                                "参考 (<70%)": len([s for s in similarity_scores if s < 0.7])
+                            }
+                            
+                            st.write("**類似度分布:**")
+                            for label, count in score_ranges.items():
+                                if count > 0:
+                                    percentage = count / len(similarity_scores) * 100
+                                    st.write(f"• {label}: {count}件 ({percentage:.0f}%)")
 
             # 検索結果リストが存在する場合
             if search_results_list:
                 # 全メタデータを取得 (いいね数などを表示するため)
                 all_metadata_display = get_all_metadata()
+                
+                # ベクトル検索結果がある場合は類似度順でソート
+                if any(item.get('search_similarity') is not None for item in search_results_list):
+                    # 類似度でソート (高い順)
+                    search_results_list_sorted = sorted(
+                        search_results_list, 
+                        key=lambda x: x.get('search_similarity', 0) if x.get('search_similarity') is not None else -1, 
+                        reverse=True
+                    )
+                    # ソート情報を表示
+                    st.caption("🔄 **結果表示順序**: ベクトル類似度の高い順 → キーワード検索結果")
+                else:
+                    # ベクトル検索結果がない場合はそのまま
+                    search_results_list_sorted = search_results_list
+                
                 # 結果を3カラムで表示
                 cols = st.columns(3)
                 col_idx = 0
-                # 保存された結果リスト (辞書のリスト) をループ
-                for table_info_search_dict in search_results_list:
+                # ソート済み結果リスト (辞書のリスト) をループ
+                for table_info_search_dict in search_results_list_sorted:
                     # 各テーブルの情報辞書を取得 (マージ済み)
                     db_name_search = table_info_search_dict.get('DATABASE_NAME')
                     sc_name_search = table_info_search_dict.get('SCHEMA_NAME')
@@ -2245,7 +2648,7 @@ def admin_page():
     **注意:**
     *   既にメタデータが存在する場合、**新しい情報で上書きされます** (いいね数は保持されます)。
     *   テーブル数が多い場合、処理に時間がかかり、Snowflakeのクレジットを消費します。
-    *   `SNOWFLAKE.CORTEX.COMPLETE` および `{EMBED_FUNCTION_NAME}` 関数へのアクセス権限が必要です。
+    *   `AI_COMPLETE` および `AI_EMBED` 関数へのアクセス権限が必要です。
     *   ベクトル生成に使用するモデルは `{DEFAULT_EMBEDDING_MODEL}` (次元数: {EMBEDDING_DIMENSION}) で固定です。
     """)
 
@@ -2263,6 +2666,81 @@ def admin_page():
         key="admin_llm_select",
         help="テーブルコメントと分析アイデアの生成に使用するモデルです。"
     )
+
+    # コメント多様性分析
+    st.markdown("**既存コメントの分析:**")
+    if st.button("コメントの多様性を分析", key="analyze_comments_btn"):
+        try:
+            analysis_query = f"""
+            SELECT 
+                COUNT(*) as total_comments,
+                COUNT(DISTINCT TABLE_COMMENT) as unique_comments,
+                AVG(LENGTH(TABLE_COMMENT)) as avg_length,
+                MIN(LENGTH(TABLE_COMMENT)) as min_length,
+                MAX(LENGTH(TABLE_COMMENT)) as max_length
+            FROM {METADATA_TABLE_NAME} 
+            WHERE TABLE_COMMENT IS NOT NULL AND TABLE_COMMENT != ''
+            """
+            analysis_result = session.sql(analysis_query).collect()
+            
+            if analysis_result:
+                stats = analysis_result[0].as_dict()
+                total = stats['TOTAL_COMMENTS']
+                unique = stats['UNIQUE_COMMENTS']
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("総コメント数", total)
+                    st.metric("ユニークコメント数", unique)
+                with col2:
+                    st.metric("重複率", f"{((total - unique) / total * 100):.1f}%" if total > 0 else "0%")
+                    st.metric("平均長さ", f"{stats['AVG_LENGTH']:.0f}文字" if stats['AVG_LENGTH'] else "0文字")
+                with col3:
+                    st.metric("最短", f"{stats['MIN_LENGTH']}文字" if stats['MIN_LENGTH'] else "0文字")
+                    st.metric("最長", f"{stats['MAX_LENGTH']}文字" if stats['MAX_LENGTH'] else "0文字")
+                
+                # 重複コメントがある場合の詳細表示
+                if unique < total:
+                    st.warning(f"⚠️ {total - unique}件の重複コメントが検出されました")
+                    if st.checkbox("重複コメント詳細を表示", key="show_duplicates"):
+                        duplicate_query = f"""
+                        SELECT TABLE_COMMENT, COUNT(*) as count
+                        FROM {METADATA_TABLE_NAME}
+                        WHERE TABLE_COMMENT IS NOT NULL AND TABLE_COMMENT != ''
+                        GROUP BY TABLE_COMMENT
+                        HAVING COUNT(*) > 1
+                        ORDER BY count DESC
+                        """
+                        duplicate_result = session.sql(duplicate_query).collect()
+                        if duplicate_result:
+                            st.write("**重複しているコメント:**")
+                            for row in duplicate_result:
+                                comment = row['TABLE_COMMENT']
+                                count = row['COUNT']
+                                st.write(f"- `{comment[:100]}{'...' if len(comment) > 100 else ''}` ({count}回)")
+        except Exception as e:
+            st.error(f"コメント分析でエラー: {e}")
+    
+    st.divider()
+
+    # テーブルコメント反映設定
+    st.markdown("**テーブルコメント反映設定:**")
+    apply_to_table = st.checkbox(
+        "生成されたコメントを実際のテーブルのCOMMENTに反映する",
+        value=False,
+        key="admin_apply_to_table",
+        help="チェックすると、LLMで生成されたコメントが実際のテーブルのCOMMENTフィールドに設定されます。"
+    )
+    
+    overwrite_mode = 'SKIP'  # デフォルト値
+    if apply_to_table:
+        overwrite_mode = st.radio(
+            "既存のテーブルコメントがある場合の処理",
+            options=['SKIP', 'OVERWRITE', 'APPEND'],
+            index=0,
+            key="admin_overwrite_mode",
+            help="SKIP: 既存コメントがある場合はスキップ, OVERWRITE: 上書き, APPEND: 既存コメントに追記"
+        )
 
     # --- 対象選択 ---
     # カラムでDB選択とスキーマ選択を横に並べる
@@ -2377,7 +2855,7 @@ def admin_page():
 
                         try:
                             # --- 個別テーブルのメタデータ生成・保存関数を呼び出し ---
-                            if generate_and_save_ai_metadata(db, sc, tbl, src_comment, model=selected_llm_model):
+                            if generate_and_save_ai_metadata(db, sc, tbl, src_comment, model=selected_llm_model, apply_to_table=apply_to_table, overwrite_mode=overwrite_mode):
                                 # 成功したらカウンターを増やす
                                 success_count += 1
                             else:
