@@ -40,7 +40,7 @@
 ## 設定項目
 必要に応じてコードを変更してください。
 *   **モデルの選択:**
-    * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するAI Embeddingモデル名。(デフォルトでは`multilingual-e5-large`を使用。 `snowflake-arctic-embed-l-v2.0`, `voyage-multilingual-2` 等の選択も可能)
+    * `DEFAULT_EMBEDDING_MODEL`: ベクトル生成に使用するAI Embeddingモデル名。(デフォルトでは`snowflake-arctic-embed-l-v2.0`を使用。`multilingual-e5-large`, `voyage-multilingual-2` 等の選択も可能)
 
     * `EMBEDDING_DIMENSION`: 使用するEmbeddingモデルの次元数。(モデルに合わせて設定: 1024 など)
 
