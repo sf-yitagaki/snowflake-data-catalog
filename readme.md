@@ -34,8 +34,8 @@
     *   コメントの多様性分析機能（重複検出、統計情報表示）。
 
 ## セットアップ
-    * `setup.sql`を実行し環境をセットアップ
-    * Snowsight上の左のタブで「Streamlit」を選択し、`data_catalog`アプリを起動
+- `setup.sql`を実行し環境をセットアップ
+- Snowsight上の左のタブで「Streamlit」を選択し、`data_catalog`アプリを起動
 
 ## 設定項目
 必要に応じてコードを変更してください。
