@@ -29,7 +29,6 @@ COPY FILES INTO @data_catalog.public.catalog_stage FROM @GIT_INTEGRATION_FOR_CAT
 
 -- Streamlit in Snowflakeの作成
 CREATE OR REPLACE STREAMLIT data_catalog
-    FROM @GIT_INTEGRATION_FOR_CATALOG/branches/main
+    ROOT_LOCATION = '@GIT_INTEGRATION_FOR_CATALOG/branches/main/streamlit'
     MAIN_FILE = 'sis.py'
-    QUERY_WAREHOUSE = COMPUTE_WH
-    ENVIRONMENT_FILE = 'environment.yml';
+    QUERY_WAREHOUSE = COMPUTE_WH;
