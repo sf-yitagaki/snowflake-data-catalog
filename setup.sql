@@ -11,7 +11,7 @@ USE SCHEMA public;
 ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION';
 
 -- ステージの作成
-CREATE OR REPLACE STAGE data_catalog.public.SEMANTIC_MODEL_STAGE encryption = (type = 'snowflake_sse') DIRECTORY = (ENABLE = TRUE);
+CREATE OR REPLACE STAGE data_catalog.public.catalog_stage encryption = (type = 'snowflake_sse') DIRECTORY = (ENABLE = TRUE);
 
 -- Git連携のため、API統合を作成する
 CREATE OR REPLACE API INTEGRATION git_api_integration
@@ -25,10 +25,11 @@ CREATE OR REPLACE GIT REPOSITORY GIT_INTEGRATION_FOR_CATALOG
   ORIGIN = 'https://github.com/sf-yitagaki/snowflake-data-catalog.git';
 
 -- Githubからファイルを持ってくる
-COPY FILES INTO @SNOWRETAIL_DB.SNOWRETAIL_SCHEMA.SEMANTIC_MODEL_STAGE FROM @GIT_INTEGRATION_FOR_HANDSON/branches/main/handson2/sales_analysis_model.yaml;
+COPY FILES INTO @data_catalog.public.catalog_stage FROM @GIT_INTEGRATION_FOR_CATALOG/branches/main/environment.yml;
 
 -- Streamlit in Snowflakeの作成
 CREATE OR REPLACE STREAMLIT data_catalog
     FROM @GIT_INTEGRATION_FOR_CATALOG/branches/main
     MAIN_FILE = 'sis.py'
-    QUERY_WAREHOUSE = COMPUTE_WH;
+    QUERY_WAREHOUSE = COMPUTE_WH
+    ENVIRONMENT_FILE = 'environment.yml';
