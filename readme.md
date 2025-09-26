@@ -34,14 +34,8 @@
     *   コメントの多様性分析機能（重複検出、統計情報表示）。
 
 ## セットアップ
-
-1. **実行方法:**
     * `setup.sql`を実行し環境をセットアップ
-    * Snowsight上の左のタブで「Streamlit」を選択し、`data_catalog`を選択
-
-2.  **依存関係のインストール:**
-    以下のライブラリをStreamlit in Snowflake上でインポートしてください。
-    * 左上の「パッケージ」にて`python-graphviz`, `snowflake-ml-python`をインポート
+    * Snowsight上の左のタブで「Streamlit」を選択し、`data_catalog`アプリを起動
 
 ## 設定項目
 必要に応じてコードを変更してください。
